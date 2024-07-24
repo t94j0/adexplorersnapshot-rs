@@ -6,7 +6,7 @@ Rewrite of [ADExplorerSnapshot.py](https://github.com/c3c/ADExplorerSnapshot.py)
 
 ## Linux
 
-Download the latest published [release](https://github.com/t94j0/adsnapshotexplorer-rs/releases/)
+Download the latest published [release](https://github.com/t94j0/adexplorersnapshot-rs/releases/)
 
 ## Windows
 
