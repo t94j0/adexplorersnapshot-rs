@@ -4,13 +4,7 @@ Rewrite of [ADExplorerSnapshot.py](https://github.com/c3c/ADExplorerSnapshot.py)
 
 # Installation
 
-## Linux
-
-Download the latest published [release](https://github.com/t94j0/adexplorersnapshot-rs/releases/)
-
-## Windows
-
-Build from source
+Pre-built binaries for Linux and Windows are published in [releases](https://github.com/t94j0/adexplorersnapshot-rs/releases/)
 
 # Usage
 

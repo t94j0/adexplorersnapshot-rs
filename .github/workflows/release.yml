@@ -8,40 +8,109 @@ on:
         required: true
 
 env:
+  ARTIFACT_PREFIX: adexplorersnapshot
   CARGO_TERM_COLOR: always
+  CARGO_PROFILE_RELEASE_LTO: "fat"
+  CARGO_PROFILE_RELEASE_STRIP: "symbols"
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build and Create Release
-    runs-on: ubuntu-latest
+    name: Build Release Assets
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            rustflags: "-Ctarget-feature=+crt-static"
+            packages: musl musl-dev musl-tools
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rustflags: "-Ctarget-feature=+crt-static"
+
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - name: Build Release
-        run: cargo build --release
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
+
+      - name: Install packages
+        if: ${{ runner.os == 'Linux' && matrix.packages != '' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGES: ${{ matrix.packages }}
+        run: sudo apt-get update -y && sudo apt-get install -y $PACKAGES
+
+      - name: Install Rust target (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup target add $TARGET
+
+      - name: Install Rust target (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup target add $env:TARGET
+
+      - name: Compile release artifacts (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        env:
+          TARGET: ${{ matrix.target }}
+          RUSTFLAGS: ${{ matrix.rustflags }}
+          ARCHIVE: ${{ env.ARTIFACT_PREFIX }}-v${{ github.event.inputs.version }}-${{ matrix.target }}.tar.gz
+        run: |
+          cargo build --release --bins --target ${TARGET}
+
+          export ARCHIVE_DIR=${ARCHIVE%.tar.gz}
+          mkdir -p ${ARCHIVE_DIR}
+          install -v -s -t ${ARCHIVE_DIR} target/${TARGET}/release/convertsnapshot
+          tar cvf ${ARCHIVE} ${ARCHIVE_DIR}
+          sha256sum ${ARCHIVE} | tee ${ARCHIVE}.sha256
+
+      - name: Compile release artifacts (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        env:
+          TARGET: ${{ matrix.target }}
+          RUSTFLAGS: ${{ matrix.rustflags }}
+          ARCHIVE: ${{ env.ARTIFACT_PREFIX }}-v${{ github.event.inputs.version }}-${{ matrix.target }}.zip
+        run: |
+          cargo build --release --bins --target $env:TARGET
+
+          $env:ARCHIVE_DIR=$env:ARCHIVE.Trim(".zip")
+          New-Item -Path . -Name $env:ARCHIVE_DIR -ItemType Directory
+          Copy-Item -Path ".\target\$env:TARGET\release\convertsnapshot.exe" -Destination $env:ARCHIVE_DIR -PassThru
+          Compress-Archive -DestinationPath $env:ARCHIVE -Path $env:ARCHIVE_DIR -PassThru
+          certutil.exe -hashfile $env:ARCHIVE SHA256 > "$env:ARCHIVE.sha256"
+
+      - name: Upload built artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_PREFIX }}-v${{ github.event.inputs.version }}-${{ matrix.target }}
+          path: |
+            ${{ env.ARTIFACT_PREFIX }}-v${{ github.event.inputs.version }}-${{ matrix.target }}.tar.gz
+            ${{ env.ARTIFACT_PREFIX }}-v${{ github.event.inputs.version }}-${{ matrix.target }}.tar.gz.sha256
+            ${{ env.ARTIFACT_PREFIX }}-v${{ github.event.inputs.version }}-${{ matrix.target }}.zip
+            ${{ env.ARTIFACT_PREFIX }}-v${{ github.event.inputs.version }}-${{ matrix.target }}.zip.sha256
+          retention-days: 1
+
+  release:
+    name: Create Github Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: ${{ env.ARTIFACT_PREFIX }}-*
+          merge-multiple: true
+
+      - name: Create Github release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.event.inputs.version }}
-          draft: false
-          prerelease: false
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./target/release/convertsnapshot
-          asset_name: convertsnapshot-${{ github.event.inputs.version }}
-          asset_content_type: application/octet-stream
+          files: artifacts/*
