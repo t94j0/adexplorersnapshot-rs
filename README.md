@@ -2,6 +2,8 @@
 
 Rewrite of [ADExplorerSnapshot.py](https://github.com/c3c/ADExplorerSnapshot.py). Outputs a .tar.gz of BloodHound CE JSON files for ingestion.
 
+Please see the [issues](https://github.com/t94j0/adexplorersnapshot-rs/issues) with this project before using it. It's not a drop in replacement yet.
+
 # Installation
 
 Pre-built binaries for Linux and Windows are published in [releases](https://github.com/t94j0/adexplorersnapshot-rs/releases/)
