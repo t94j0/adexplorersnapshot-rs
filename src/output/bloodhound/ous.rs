@@ -3,10 +3,9 @@ use super::utils::{Aces, Meta};
 use crate::parser::{ADExplorerSnapshot, AttributeValue, Object, ObjectType};
 use nom::{
     branch::alt,
-    bytes::complete::{is_not, tag},
+    bytes::complete::{is_not, tag, tag_no_case},
     character::complete::char,
     combinator::{map, opt, value},
-    multi::separated_list0,
     sequence::{delimited, preceded, tuple},
     IResult,
 };
@@ -183,18 +182,19 @@ impl Link {
     fn parse_gplink_entry(input: &str) -> IResult<&str, Link> {
         map(
             tuple((
-                preceded(tag("LDAP://cn="), Self::parse_guid),
-                alt((value(true, tag(";2")), value(false, opt(tag(";0"))))),
+                preceded(tag_no_case("LDAP://cn="), Self::parse_guid),
+                // Skip everything between the GUID and the semicolon (e.g., ",CN=Policies,CN=System,DC=lab,DC=local")
+                preceded(
+                    is_not(";"),
+                    alt((value(true, tag(";2")), value(false, opt(tag(";0"))))),
+                ),
             )),
             |(guid, is_enforced)| Link { guid, is_enforced },
         )(input)
     }
 
     fn parse_gplink(input: &str) -> IResult<&str, Vec<Link>> {
-        separated_list0(
-            char(']'),
-            delimited(char('['), Self::parse_gplink_entry, opt(char(']'))),
-        )(input)
+        nom::multi::many0(delimited(char('['), Self::parse_gplink_entry, char(']')))(input)
     }
 
     pub fn from_gplink(gplink: &str) -> Vec<Link> {
@@ -211,4 +211,67 @@ fn process_links(obj: &Object) -> Vec<Link> {
         .and_then(AttributeValue::as_string)
         .map(|gplink| Link::from_gplink(gplink))
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gplink_parsing_uppercase_cn() {
+        // Real-world format with uppercase CN=
+        let gplink = "[LDAP://CN={31B2F340-016D-11D2-945F-00C04FB984F9},CN=Policies,CN=System,DC=lab,DC=local;0]";
+        let links = Link::from_gplink(gplink);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].guid, "31B2F340-016D-11D2-945F-00C04FB984F9");
+        assert!(!links[0].is_enforced);
+    }
+
+    #[test]
+    fn test_gplink_parsing_lowercase_cn() {
+        // Format with lowercase cn=
+        let gplink = "[LDAP://cn={31B2F340-016D-11D2-945F-00C04FB984F9},cn=Policies,cn=System,DC=lab,DC=local;0]";
+        let links = Link::from_gplink(gplink);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].guid, "31B2F340-016D-11D2-945F-00C04FB984F9");
+        assert!(!links[0].is_enforced);
+    }
+
+    #[test]
+    fn test_gplink_parsing_enforced() {
+        // Enforced GPO (;2)
+        let gplink = "[LDAP://CN={31B2F340-016D-11D2-945F-00C04FB984F9},CN=Policies,CN=System,DC=lab,DC=local;2]";
+        let links = Link::from_gplink(gplink);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].guid, "31B2F340-016D-11D2-945F-00C04FB984F9");
+        assert!(links[0].is_enforced);
+    }
+
+    #[test]
+    fn test_gplink_parsing_multiple_gpos() {
+        // Multiple GPOs linked
+        let gplink = "[LDAP://CN={31B2F340-016D-11D2-945F-00C04FB984F9},CN=Policies,CN=System,DC=lab,DC=local;0][LDAP://CN={6AC1786C-016F-11D2-945F-00C04FB984F9},CN=Policies,CN=System,DC=lab,DC=local;2]";
+        let links = Link::from_gplink(gplink);
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].guid, "31B2F340-016D-11D2-945F-00C04FB984F9");
+        assert!(!links[0].is_enforced);
+        assert_eq!(links[1].guid, "6AC1786C-016F-11D2-945F-00C04FB984F9");
+        assert!(links[1].is_enforced);
+    }
+
+    #[test]
+    fn test_gplink_parsing_empty() {
+        let gplink = "";
+        let links = Link::from_gplink(gplink);
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn test_gplink_guid_uppercase_conversion() {
+        // Lowercase GUID should be converted to uppercase
+        let gplink = "[LDAP://CN={31b2f340-016d-11d2-945f-00c04fb984f9},CN=Policies,CN=System,DC=lab,DC=local;0]";
+        let links = Link::from_gplink(gplink);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].guid, "31B2F340-016D-11D2-945F-00C04FB984F9");
+    }
 }
