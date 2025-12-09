@@ -3,6 +3,7 @@ use crate::security_descriptor::ControlFlag;
 use serde::{Deserialize, Serialize};
 
 use super::common::get_aces;
+use super::ous::Link;
 use super::utils::Aces;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -48,7 +49,7 @@ pub struct Domain {
     pub trusts: Vec<Trust>,
 
     #[serde(rename = "Links")]
-    links: Vec<Links>,
+    links: Vec<Link>,
 
     #[serde(rename = "Aces")]
     aces: Vec<Aces>,
@@ -84,7 +85,7 @@ impl Domain {
             properties: DomainProperties::new(obj, snapshot),
             child_objects: Vec::new(),
             trusts: process_trusts(snapshot),
-            links: Vec::new(),
+            links: process_links(obj),
             aces: get_aces(obj, snapshot),
             object_identifier: guid.to_string(),
             is_deleted: false,
@@ -93,13 +94,12 @@ impl Domain {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Links {
-    #[serde(rename = "IsEnforced")]
-    is_enforced: bool,
-
-    #[serde(rename = "GUID")]
-    guid: String,
+fn process_links(obj: &Object) -> Vec<Link> {
+    obj.get("gPLink")
+        .and_then(|values| values.first())
+        .and_then(AttributeValue::as_string)
+        .map(|gplink| Link::from_gplink(gplink))
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
