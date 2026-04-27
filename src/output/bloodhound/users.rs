@@ -279,23 +279,25 @@ fn process_allowed_to_delegate(
                 .iter()
                 .filter_map(AttributeValue::as_string)
                 .flat_map(|host| {
-                    let target = host.split('/').nth(1).unwrap_or(host);
-
-                    if let Some(target_obj) = snapshot.get_computer(&target) {
+                    let Some(after_service) = host.split('/').nth(1) else {
+                        return vec![];
+                    };
+                    let target = after_service.split(':').next().unwrap_or(after_service);
+                    if target.is_empty() {
+                        return vec![];
+                    }
+                    if let Some(target_obj) = snapshot.get_computer(target) {
                         vec![DelegationTarget {
                             object_identifier: target_obj
                                 .get_object_identifier()
                                 .unwrap_or("ERR_UNKNOWN".to_string()),
                             object_type: type_string(target_obj),
                         }]
-                    } else if target.contains('.') {
+                    } else {
                         vec![DelegationTarget {
                             object_identifier: target.to_uppercase(),
                             object_type: "Computer".to_string(),
                         }]
-                    } else {
-                        eprintln!("Invalid delegation target: {}", host);
-                        vec![]
                     }
                 })
                 .collect()
