@@ -262,6 +262,25 @@ pub struct LocalGroupMember {
     pub object_type: String,
 }
 
+/// Extract the host component from an `msDS-AllowedToDelegateTo` SPN.
+///
+/// Accepts the common forms:
+///   - `service/host`            → `Some("host")`
+///   - `service/host:port`       → `Some("host")`
+///   - `service/host.fqdn`       → `Some("host.fqdn")`
+///   - `service/host.fqdn:port`  → `Some("host.fqdn")`
+///
+/// Returns `None` for entries with no `/` or an empty host.
+pub(crate) fn parse_delegation_target(spn: &str) -> Option<&str> {
+    let after_service = spn.split('/').nth(1)?;
+    let target = after_service.split(':').next().unwrap_or(after_service);
+    if target.is_empty() {
+        None
+    } else {
+        Some(target)
+    }
+}
+
 fn process_allowed_to_delegate(
     obj: &Object,
     snapshot: &ADExplorerSnapshot,
@@ -272,13 +291,9 @@ fn process_allowed_to_delegate(
                 .iter()
                 .filter_map(AttributeValue::as_string)
                 .flat_map(|host| {
-                    let Some(after_service) = host.split('/').nth(1) else {
+                    let Some(target) = parse_delegation_target(host) else {
                         return vec![];
                     };
-                    let target = after_service.split(':').next().unwrap_or(after_service);
-                    if target.is_empty() {
-                        return vec![];
-                    }
                     if let Some(target_obj) = snapshot.get_computer(target) {
                         vec![DelegationTarget {
                             object_identifier: target_obj
@@ -328,4 +343,86 @@ fn process_sid_history(obj: &Object) -> Vec<SIDHistoryItem> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_delegation_target;
+
+    // SPNs in `msDS-AllowedToDelegateTo` arrive in several real-world forms.
+    // These tests pin the parser's behavior so the regression that dropped
+    // valid entries (short hostnames, ported hosts) doesn't come back.
+
+    #[test]
+    fn parses_short_host_without_port() {
+        assert_eq!(parse_delegation_target("HOST/web01"), Some("web01"));
+    }
+
+    #[test]
+    fn parses_short_host_with_port() {
+        assert_eq!(
+            parse_delegation_target("MSSQLSVC/db01:1433"),
+            Some("db01"),
+        );
+    }
+
+    #[test]
+    fn parses_fqdn_without_port() {
+        assert_eq!(
+            parse_delegation_target("http/web01.example.com"),
+            Some("web01.example.com"),
+        );
+    }
+
+    #[test]
+    fn parses_fqdn_with_port() {
+        assert_eq!(
+            parse_delegation_target("MSSQLSvc/db01.example.com:1433"),
+            Some("db01.example.com"),
+        );
+    }
+
+    #[test]
+    fn parses_unusual_port_number() {
+        // Real snapshots contain non-default ports (e.g. named SQL instances).
+        assert_eq!(
+            parse_delegation_target("MSSQLSVC/db01:55572"),
+            Some("db01"),
+        );
+    }
+
+    #[test]
+    fn lowercase_service_prefix_is_accepted() {
+        assert_eq!(parse_delegation_target("http/intranet"), Some("intranet"));
+    }
+
+    #[test]
+    fn rejects_entry_with_no_slash() {
+        assert_eq!(parse_delegation_target("not-an-spn"), None);
+    }
+
+    #[test]
+    fn rejects_empty_input() {
+        assert_eq!(parse_delegation_target(""), None);
+    }
+
+    #[test]
+    fn rejects_empty_host() {
+        assert_eq!(parse_delegation_target("HOST/"), None);
+    }
+
+    #[test]
+    fn rejects_empty_host_with_port_marker() {
+        // "HOST/:1433" — slash present, host empty before the port.
+        assert_eq!(parse_delegation_target("HOST/:1433"), None);
+    }
+
+    #[test]
+    fn ignores_extra_realm_segment() {
+        // Three-part SPNs (service/host/realm) — we only care about the host.
+        assert_eq!(
+            parse_delegation_target("HTTP/web01/EXAMPLE.COM"),
+            Some("web01"),
+        );
+    }
 }

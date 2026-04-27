@@ -1,4 +1,5 @@
 use super::common::{get_aces, get_sid, is_acl_protected, ldap2domain};
+use super::computers::parse_delegation_target;
 use super::utils::{Aces, Meta};
 use crate::output::bloodhound::common::type_string;
 use crate::parser::Cache;
@@ -279,13 +280,9 @@ fn process_allowed_to_delegate(
                 .iter()
                 .filter_map(AttributeValue::as_string)
                 .flat_map(|host| {
-                    let Some(after_service) = host.split('/').nth(1) else {
+                    let Some(target) = parse_delegation_target(host) else {
                         return vec![];
                     };
-                    let target = after_service.split(':').next().unwrap_or(after_service);
-                    if target.is_empty() {
-                        return vec![];
-                    }
                     if let Some(target_obj) = snapshot.get_computer(target) {
                         vec![DelegationTarget {
                             object_identifier: target_obj
